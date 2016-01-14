@@ -1,0 +1,206 @@
+#! /usr/bin/python2
+"""
+Test module for testing the implementation of the ASTRA toolbox using
+its python interface PyAstra.
+
+"""
+
+import astra
+import numpy as np
+import time
+# import matplotlib
+# matplotlib.use('QTAgg')
+import matplotlib.pyplot as plt
+#import matplotlib as mpl
+# import matplotlib.pylab as plt
+
+
+def phantom_ball(num_voxel=None, relative_origin=None, relative_radius=0.3):
+    """Create a 3D binary phantom object 'phan' with num_voxel and
+    consisting of a ball with radius relative_radius*min(num_voxel)
+    and located at num_voxel.*relative_origin.
+
+    Parameters
+    ----------
+    :rtype : numpy.array
+    num_voxel : list of integers of length 1 or 3
+        If len(list)==1, num_voxel is extended to length 3 with value num_voxel[0].
+    relative_origin : list floats of length 1 or 3 with values in [0,1]
+        If len(list)==1, num_voxel is extended to length 3 with value num_voxel[0].
+    relative_radius : float
+
+    #>>> phan = phantom_ball([10])
+    #>>> print phan.shape
+    (10, 10, 10)
+    """
+
+    if isinstance(num_voxel, (int, float)):
+        num_voxel = num_voxel,
+    if isinstance(relative_origin, (int, float)):
+        relative_origin = (relative_origin)
+
+    # Default arguments
+    if not relative_origin:
+        relative_origin = 0.5,
+    if not num_voxel:
+        num_voxel = 100,
+    # Default arguments, continued
+    if len(num_voxel) == 1:
+        num_voxel = (num_voxel[0], num_voxel[0], num_voxel[0])
+    if len(relative_origin) == 1:
+        relative_origin = (relative_origin[0], relative_origin[0], relative_origin[0])
+
+    # create grid
+    x = np.arange(num_voxel[0])
+    y = np.arange(num_voxel[1])
+    z = np.arange(num_voxel[2])
+    # 3D array
+    [x, y, z] = np.meshgrid(y, x, z)
+    # centre
+    x0 = relative_origin[0] * (num_voxel[0] - 1)
+    y0 = relative_origin[1] * (num_voxel[1] - 1)
+    z0 = relative_origin[2] * (num_voxel[2] - 1)
+    # Radius
+    r = relative_radius * np.min(num_voxel)
+    # phantom
+    a = (x - x0) ** 2 + (y - y0) ** 2 + (z - z0) ** 2 <= r ** 2
+    phan = np.zeros(num_voxel)
+    phan[a] = 1
+
+    return phan
+
+
+def conebeam_test(alg_type='sirt3d', num_iterations=10, padding=(0, 0), scale_factor=1, vol_init=None, gpu_index=0,
+                  num_voxel=None, num_pixel=None, num_angles=150):
+    """Test conebeam reconstruction of ASTRA.
+
+    conebeam_test()
+    """
+
+    # Default arguments
+    if not num_voxel:
+        num_voxel = [100, 100, 100]
+    if not num_pixel:
+        num_pixel = [112, 112]
+
+    # print astra workspace
+    if 0:
+        astra.algorithm.info()
+        astra.data3d.info()
+        astra.projector.info()
+
+    if padding[0]:
+        pass
+
+    if scale_factor:
+        pass
+
+    detector_spacing_x = 1
+    detector_spacing_y = 1
+    det_row_count = num_pixel[0]
+    det_col_count = num_pixel[1]
+    angle_range = np.linspace(0, np.pi, num_angles, endpoint=True)
+
+    print("GPU index: %u" % gpu_index)
+    # Create volume geometry
+    vol_geom = astra.create_vol_geom(*num_voxel)
+    # Create projection geometry
+    proj_geom = astra.create_proj_geom('parallel3d',
+                                       detector_spacing_x, detector_spacing_y,
+                                       det_row_count, det_col_count,
+                                       angle_range)
+    print("Number of projections: %u" % proj_geom['ProjectionAngles'].shape)
+    # Create phantom object
+    # phan = phantom_ball(num_voxel, (0.4, 0.4, 0.4), 0.25) + phantom_ball(num_voxel, (0.7, 0.7, 0.7), 0.2)
+    phan = phantom_ball(num_voxel, (0.5, 0.5, 0.5), 0.4) 
+    
+    t = time.time()
+    # Create a sinogram from phantom
+    sinogram_id, sinogram = astra.create_sino3d_gpu(phan, proj_geom, vol_geom, returnData=True, gpuIndex=gpu_index)
+
+    # Set up the parameters for a reconstruction algorithm using the GPU
+    rec_id = astra.data3d.create('-vol', vol_geom, vol_init)
+    alg_type += '_CUDA'
+    alg_type = alg_type.upper()
+    cfg = astra.astra_dict(alg_type)
+    print("Algorithm: %s" % cfg['type'])
+    cfg['ReconstructionDataId'] = rec_id
+    cfg['ProjectionDataId'] = sinogram_id
+
+    # Use GPU
+    cfg['option'] = {}
+    cfg['option']['GPUindex'] = gpu_index
+
+    # Iterate algorithm
+    alg_id = astra.algorithm.create(cfg)
+    astra.algorithm.run(alg_id, num_iterations)
+    rec_vol = astra.data3d.get(rec_id)
+
+    print("Elapsed time: %g s" % (time.time() - t))
+
+    # Clean up.
+    # astra.algorithm.delete(alg_id)
+    # astra.data2d.delete(rec_id)
+    # astra.data2d.delete(sinogram_id)
+    # astra.projector.delete(proj_id)
+
+    astra.algorithm.clear()
+    astra.data2d.clear()
+    astra.projector.clear()
+
+    return rec_vol, sinogram, phan, angle_range
+
+
+def show_slice(array3d):
+    nx, ny, nz = array3d.shape
+    fig = plt.figure('Sinogram')
+
+    cm = plt.cm.Greys
+    
+    ax1 = fig.add_subplot(1, 3, 1)
+    nn = np.round(nx/2) - 1
+    im1 = ax1.imshow(array3d[nn, :, :], cmap=cm)
+    ax1.set_title("yz-slice %u of %u" % (nn, nx))
+    ax1.set_ylabel('ax1 ylabel')
+
+    ax2 = fig.add_subplot(1, 3, 2)
+    nn = np.round(ny/2) - 1
+    ax2.imshow(array3d[:, nn, :], cmap=cm)
+    ax2.set_title("xz-slice %u of %u" % (nn, ny))
+    ax2.set_ylabel('ax2 ylabel')
+
+    ax3 = fig.add_subplot(1, 3, 3)
+    nn = np.round(nz/2) - 1
+    ax3.imshow(array3d[:, :, nn], cmap=cm)
+    ax3.set_title("xy-slice %u of %u" % (nn,nz))
+    ax3.set_ylabel('ax3 ylable')
+    
+    #plt.annotate('annotation', xy=(2, 1), xytext=(2, 1))
+    #plt.show()
+    return fig, ax1, im1
+    
+    
+
+
+# ph = phantom_ball()
+rec, sino, phan, angles = conebeam_test(num_voxel=[10,10,10])
+
+s = sino[50, :, :]
+
+#show_slice(phan)
+#show_slice(sino)
+fig, ax, im1 = show_slice(rec)
+
+if 0:
+    plt.ion()
+    fig = plt.figure('Sinogram')
+    ax = fig.add_subplot(211)
+    im = ax.imshow(s)
+    fig.show()
+    im.axes.figure.canvas.draw()
+
+
+# if __name__ == "__main__":
+#    import doctest
+#
+#    doctest.testmod()

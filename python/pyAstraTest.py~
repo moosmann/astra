@@ -1,0 +1,10 @@
+def runTest():
+    """Test script.
+
+    >>> runTest()
+    hello
+    1
+    """
+    a = "hello"
+    print(a)
+    return 1
