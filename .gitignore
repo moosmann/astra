@@ -5,6 +5,8 @@
 # Python notebooks
 * .ipynb_checkpoints
 
+*.cache
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
